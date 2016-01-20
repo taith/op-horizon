@@ -16,7 +16,7 @@ import horizon
 from openstack_dashboard.dashboards.monitoring import dashboard
 
 class Vmcompute(horizon.Panel):
-    name = _("Vmcompute")
+    name = _("VM Compute")
     slug = "vmcompute"
 
 

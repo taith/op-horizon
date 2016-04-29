@@ -13,7 +13,7 @@
 from horizon.test import helpers as test
 
 
-class NetworkcomputeTests(test.TestCase):
-    # Unit tests for networkcompute.
+class Virtual_MachineTests(test.TestCase):
+    # Unit tests for virtual_machine.
     def test_me(self):
         self.assertTrue(1 + 1 == 2)

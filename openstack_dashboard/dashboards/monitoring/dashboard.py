@@ -14,17 +14,12 @@ from django.utils.translation import ugettext_lazy as _
 
 import horizon
 
-class System(horizon.PanelGroup):
- slug = "system"
- name = _("System")
- panels = ('vmcompute','networkcompute',)
-
 
 class Monitoring(horizon.Dashboard):
-   name = _("Monitoring")
-   slug = "monitoring"
-   panels = (System,)  # Add your panels here.
-   default_panel = 'vmcompute'  # Specify the slug of the dashboard's default panel.
+    name = _("Monitoring")
+    slug = "monitoring"
+    panels = ('virtual_machine')  # Add your panels here.
+    default_panel = 'virtual_machine'  # Specify the slug of the dashboard's default panel.
 
 
 horizon.register(Monitoring)

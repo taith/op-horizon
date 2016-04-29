@@ -10,13 +10,14 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from horizon import views
+from django.utils.translation import ugettext_lazy as _
+
+import horizon
+from openstack_dashboard.dashboards.monitoring import dashboard
+
+class Virtual_Machine(horizon.Panel):
+    name = _("Virtual_Machine")
+    slug = "virtual_machine"
 
 
-class IndexView(views.APIView):
-    # A very simple class-based view...
-    template_name = 'monitoring/vmcompute/index.html'
-
-    def get_data(self, request, context, *args, **kwargs):
-        # Add data to the context here...
-        return context
+dashboard.Monitoring.register(Virtual_Machine)

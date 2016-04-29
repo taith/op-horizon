@@ -10,10 +10,13 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from horizon.test import helpers as test
+from django.conf.urls import patterns
+from django.conf.urls import url
+
+from .views import IndexView, SamplesView, ExportView
 
 
-class VmcomputeTests(test.TestCase):
-    # Unit tests for vmcompute.
-    def test_me(self):
-        self.assertTrue(1 + 1 == 2)
+urlpatterns = patterns('openstack_dashboard.dashboards.monitoring.virtual_machine.views',
+    url(r'^$', IndexView.as_view(), name='index'),
+    url(r'^samples$', SamplesView.as_view(), name='samples'),
+    url(r'^export$', ExportView.as_view(), name='export'))

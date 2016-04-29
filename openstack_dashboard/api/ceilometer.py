@@ -10,8 +10,12 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import itertools
+import logging
+import urlparse
 from collections import OrderedDict
 import threading
+import keystone
 
 from ceilometerclient import client as ceilometer_client
 from django.conf import settings
@@ -22,18 +26,9 @@ from horizon.utils.memoized import memoized  # noqa
 
 from openstack_dashboard.api import base
 from openstack_dashboard.api import keystone
-from openstack_dashboard.api import nova
 
 
-def get_flavor_names(request):
-    # TODO(lsmola) The flavors can be set per project,
-    # so it should show only valid ones.
-    try:
-        flavors = nova.flavor_list(request, None)
-        return [f.name for f in flavors]
-    except Exception:
-        return ['m1.tiny', 'm1.small', 'm1.medium',
-                'm1.large', 'm1.xlarge']
+LOG = logging.getLogger(__name__)
 
 
 def is_iterable(var):
@@ -258,6 +253,33 @@ class Sample(base.APIResourceWrapper):
         display_name = self.resource_metadata.get("display_name", None)
         return name or display_name or ""
 
+class GlobalObjectStoreUsage(base.APIDictWrapper):
+    _attrs = ["tenant", "user", "resource", "storage_objects",
+              "storage_objects_size", "storage_objects_outgoing_bytes",
+              "storage_objects_incoming_bytes"]
+
+
+class GlobalDiskUsage(base.APIDictWrapper):
+    _attrs = ["tenant", "user", "resource", "disk_read_bytes",
+              "disk_read_requests", "disk_write_bytes",
+              "disk_write_requests"]
+
+
+class GlobalNetworkTrafficUsage(base.APIDictWrapper):
+    _attrs = ["tenant", "user", "resource", "network_incoming_bytes",
+              "network_incoming_packets", "network_outgoing_bytes",
+              "network_outgoing_packets"]
+
+
+class GlobalCpuUsage(base.APIDictWrapper):
+    _attrs = ["tenant", "user", "resource", "cpu"]
+
+
+class GlobalNetworkUsage(base.APIDictWrapper):
+    _attrs = ["tenant", "user", "resource", "network", "network_create",
+              "subnet", "subnet_create", "port", "port_create", "router",
+              "router_create", "ip_floating", "ip_floating_create"]
+
 
 class Statistic(base.APIResourceWrapper):
     """Represents one Ceilometer statistic."""
@@ -265,6 +287,41 @@ class Statistic(base.APIResourceWrapper):
     _attrs = ['period', 'period_start', 'period_end',
               'count', 'min', 'max', 'sum', 'avg',
               'duration', 'duration_start', 'duration_end']
+
+
+class Alarm(base.APIResourceWrapper):
+    """Represents one Ceilometer alarm."""
+    _attrs = ['alarm_actions', 'ok_actions', 'name',
+              'timestamp', 'description', 'time_constraints',
+              'enabled', 'state_timestamp', 'alarm_id',
+              'state', 'insufficient_data_actions',
+              'repeat_actions', 'user_id', 'project_id',
+              'type', 'severity', 'threshold_rule', 'period', 'query',
+              'evaluation_periods', 'statistic', 'meter_name',
+              'threshold', 'comparison_operator', 'exclude_outliers']
+
+    def __init__(self, apiresource, ceilometer_usage=None):
+        super(Alarm, self).__init__(apiresource)
+        self._tenant = None
+        self._user = None
+
+        if ceilometer_usage and self.project_id:
+            self._tenant = ceilometer_usage.get_tenant(self.project_id)
+
+        if ceilometer_usage and self.user_id:
+            self._user = ceilometer_usage.get_user(self.user_id)
+
+    @property
+    def id(self):
+        return self.alarm_id
+
+    @property
+    def tenant(self):
+        return self._tenant
+
+    @property
+    def user(self):
+        return self._user
 
 
 @memoized
@@ -278,6 +335,35 @@ def ceilometerclient(request):
                                     token=(lambda: request.user.token.id),
                                     insecure=insecure,
                                     cacert=cacert)
+
+
+def alarm_list(request, query=None, ceilometer_usage=None):
+    """List alarms."""
+    alarms = ceilometerclient(request).alarms.list(q=query)
+    return [Alarm(alarm, ceilometer_usage) for alarm in alarms]
+
+
+def alarm_get(request, alarm_id, ceilometer_usage=None):
+    """Get an alarm."""
+    alarm = ceilometerclient(request).alarms.get(alarm_id)
+    return Alarm(alarm, ceilometer_usage)
+
+
+def alarm_update(request, alarm_id, ceilometer_usage=None, **kwargs):
+    """Update an alarm."""
+    alarm = ceilometerclient(request).alarms.update(alarm_id, **kwargs)
+    return Alarm(alarm, ceilometer_usage)
+
+
+def alarm_delete(request, alarm_id):
+    """Delete an alarm."""
+    ceilometerclient(request).alarms.delete(alarm_id)
+
+
+def alarm_create(request, ceilometer_usage=None, **kwargs):
+    """Create an alarm."""
+    alarm = ceilometerclient(request).alarms.create(**kwargs)
+    return Alarm(alarm, ceilometer_usage)
 
 
 def resource_list(request, query=None, ceilometer_usage_object=None):
@@ -304,6 +390,112 @@ def statistic_list(request, meter_name, query=None, period=None):
     statistics = ceilometerclient(request).\
         statistics.list(meter_name=meter_name, q=query, period=period)
     return [Statistic(s) for s in statistics]
+
+
+def global_cpu_usage(request):
+    result_list = global_usage(request, ["cpu"])
+    return [GlobalCpuUsage(u) for u in result_list]
+
+
+def global_object_store_usage(request):
+    result_list = global_usage(request, ["storage.objects",
+                                         "storage.objects.size",
+                                         "storage.objects.incoming.bytes",
+                                         "storage.objects.outgoing.bytes"])
+    return [GlobalObjectStoreUsage(u) for u in result_list]
+
+
+def global_disk_usage(request):
+    result_list = global_usage(request, ["disk.read.bytes",
+                                         "disk.read.requests",
+                                         "disk.write.bytes",
+                                         "disk.write.requests"])
+    return [GlobalDiskUsage(u) for u in result_list]
+
+
+def global_network_traffic_usage(request):
+    result_list = global_usage(request, ["network.incoming.bytes",
+                                         "network.incoming.packets",
+                                         "network.outgoing.bytes",
+                                         "network.outgoing.packets"])
+    return [GlobalNetworkTrafficUsage(u) for u in result_list]
+
+
+def global_network_usage(request):
+    result_list = global_usage(request, ["network", "network_create",
+                                         "subnet", "subnet_create",
+                                         "port", "port_create",
+                                         "router", "router_create",
+                                         "ip_floating", "ip_floating_create"])
+    return [GlobalNetworkUsage(u) for u in result_list]
+
+
+def global_usage(request, fields):
+    meters = meter_list(request)
+
+    filtered = filter(lambda m: m.name in fields, meters)
+
+    def get_query(user, project, resource):
+        query = []
+        if user:
+            query.append({"field": "user", "op": "eq", "value": user})
+        if project:
+            query.append({"field": "project", "op": "eq", "value": project})
+        if resource:
+            query.append({"field": "resource", "op": "eq", "value": resource})
+        return query
+
+    usage_list = []
+    ks_user_list = keystone.user_list(request)
+    ks_tenant_list, more = keystone.tenant_list(request, admin=True)
+
+    def get_user(user_id):
+        for u in ks_user_list:
+            if u.id == user_id:
+                return u.name
+        return user_id
+
+    def get_tenant(tenant_id):
+        for t in ks_tenant_list:
+            if t.id == tenant_id:
+                return t.name
+        return tenant_id
+
+    for m in filtered:
+        statistics = statistic_list(request, m.name,
+                                    query=get_query(m.user_id,
+                                                    m.project_id,
+                                                    m.resource_id))
+        # TODO: It seems that there's only one element in statistic list.
+        # TODO: if statistics is []
+        statistic = statistics[0]
+
+        usage_list.append({"tenant": get_tenant(m.project_id),
+                          "user": get_user(m.user_id),
+                          "total": statistic.max,
+                          "counter_name": m.name.replace(".", "_"),
+                          "resource": m.resource_id})
+    return _group_usage(usage_list, fields)
+
+
+def _group_usage(usage_list, fields=[]):
+    """
+    Group usage data of different counters to one object.
+    The usage data in one group have the same resource,
+    user and project.
+    """
+    fields = [f.replace(".", "_") for f in fields]
+    result = {}
+    for s in usage_list:
+        key = "%s_%s_%s" % (s['user'], s['tenant'], s['resource'])
+        if key not in result:
+            result[key] = s
+        # Make sure each object contains the fields that may not
+        # be achived from ceilometer.
+        for f in fields:
+            result[key].setdefault(f, 0)
+        result[key].update({s['counter_name']: s['total']})
+    return result.values()
 
 
 class ThreadedUpdateResourceWithStatistics(threading.Thread):
@@ -1033,16 +1225,6 @@ class Meters(object):
                                  "packets on a VM network interface"),
             }),
         ])
-        # Adding flavor based meters into meters_info dict
-        # TODO(lsmola) this kind of meter will be probably deprecated
-        # https://bugs.launchpad.net/ceilometer/+bug/1208365 . Delete it then.
-        for flavor in get_flavor_names(self._request):
-            name = 'instance:%s' % flavor
-            meters_info[name] = dict(meters_info["instance:<type>"])
-
-            meters_info[name]['description'] = (
-                _('Duration of instance type %s (openstack flavor)') %
-                flavor)
 
         # TODO(lsmola) allow to set specific in local_settings. For all meters
         # because users can have their own agents and meters.
